@@ -1,108 +1,128 @@
-express=require("express");
-app=express();
+const express = require("express");
+const app = express();
 require("dotenv").config();
-jwt=require("jsonwebtoken");
-mongoose=require("mongoose")
-mongoose.connect(process.env.Mongo_URL,{useNewUrlParser:true,useUnifiedTopology:true}).then(()=>{
-    console.log("Connected to DB");
+const jwt = require("jsonwebtoken");
+const mongoose = require("mongoose");
+
+// Connect to MongoDB
+mongoose.connect(process.env.Mongo_URL, { useNewUrlParser: true, useUnifiedTopology: true })
+    .then(() => {
+        console.log("Connected to DB");
+    })
+    .catch((err) => {
+        console.error("Error connecting to DB:", err);
+    });
+
+// Event schema
+const eventSchema = new mongoose.Schema({
+    name: String,
+    description: String,
+    date: Date,
+    time: String,
+    category: String,
+    user_id: String,
+    setReminder: Boolean,
 });
 
-//event schema
-eventScmecha=new mongoose.Schema({
-    name:String,
-    description:String,
-    date:Date,
-    time:String,
-    category:String,
-    user_id:String,
-    setReminder:Boolean,
+const EventModel = mongoose.model("Event", eventSchema);
+
+// User schema
+const userSchema = new mongoose.Schema({
+    name: String,
+    email: String,
+    password: String,
 });
 
-eventModel=mongoose.model("event",eventScmecha);
+const UserModel = mongoose.model("User", userSchema);
 
-//user schema
-userSchema=new mongoose.Schema({
-    name:String,
-    email:String,
-    password:String,
-});
-usermodel=mongoose.model("user",userSchema);
-//authentication middleware
-const authenticateUser=((next,req,res)=>{
-    if(req.headers.authorization){
-        let auth=req.headers.authorization;
-        let token=auth.split(" ")[1];
-        user=jwt.verify(token,process.env.SECRET_KEY)
-        if(user){
-            req.user=user;
+// Authentication middleware
+const authenticateUser = (req, res, next) => {
+    if (req.headers.authorization) {
+        const auth = req.headers.authorization;
+        const token = auth.split(" ")[1];
+        try {
+            const user = jwt.verify(token, process.env.SECRET_KEY);
+            req.user = user;
             next();
+        } catch (err) {
+            res.status(400).send({ message: "Invalid Token" });
         }
-        else{
-            res.status(400).send({message:"Invalid Token"});
-        }
+    } else {
+        res.status(400).send({ message: "Empty Token" });
     }
-    else{
-        req.status(400).send({message:"Empty Token"});
-    }
-    
-});
-//signup
-app.post("/signup",function(req,res){
+};
+
+// Signup route
+app.post("/signup", async (req, res) => {
     try {
-        user=new usermodel(req.body);
-        jwt.sign({email:user.email},process.env.SECRET_KEY,(err,token)=>{
-            if(err){
-                res.status(400).send({message:"Error while creating token"});
-            }
-            else{
-                user.save();
-                res.send({message:"User Created",token:token});
-            }
+        const user = new UserModel(req.body);
+        const token = jwt.sign({ email: user.email }, process.env.SECRET_KEY);
+        await user.save();
+        res.send({ message: "User Created", token: token });
+    } catch (error) {
+        res.status(400).send({ message: "Error while creating user" });
+    }
+});
+
+// Create event route
+app.post("/event/add", authenticateUser, async (req, res) => {
+    try {
+        const { name, description, date, time, category } = req.body;
+        const newEvent = new EventModel({
+            name,
+            description,
+            date,
+            time,
+            category,
+            user_id: req.user._id,
+            setReminder: false,
         });
-        user.save();
-        res.send({message:"User Created"});
+        await newEvent.save();
+        res.send({ message: "Event created successfully" });
     } catch (error) {
-        res.status(400).send({message:"Error while creating user"});
+        res.status(400).send({ message: "Error while saving the event" });
     }
 });
-//create event
-app.post("event/add",authenticateUser,function(req,res){
+
+// Get upcoming events sorted by date
+app.get("/event", authenticateUser, async (req, res) => {
     try {
-        const {name,description,date,time,category}=req.body;
-        newEvent=new eventModel({name,description,date,time,category,user_id:req.user._id,setReminder:false});
-        newEvent.save();
+        const currentDate = new Date();
+        const events = await EventModel.find({ date: { $gte: currentDate }, user_id: req.user._id }).sort({ date: 1 });
+        res.send(events);
     } catch (error) {
-        res.status(400).send({message:"Error while saving the event"});
+        res.status(400).send({ message: "Error while fetching events" });
     }
 });
-//get upcoming events sorted by date
-app.get("event/",authenticateUser,function(req,res){
+
+// Add reminder
+app.post("/reminder/add", authenticateUser, async (req, res) => {
     try {
-        currentDate=Date.now();
-        events=eventModel.find({date:{$gte:currentDate},user_id:req.user.id}).sort({date:1});
+        const event = await EventModel.findById(req.body.event_id);
+        if (event) {
+            event.setReminder = true;
+            await event.save();
+            res.send({ message: "Reminder added successfully" });
+        } else {
+            res.status(404).send({ message: "Event not found" });
+        }
     } catch (error) {
-        res.status(400).send({message:"Error while fetching events"});
+        res.status(400).send({ message: "Error while saving the reminder" });
     }
 });
-// add reminder
-app.post("reminder/add",authenticateUser,function(req,res){
+
+// Get reminders
+app.get("/reminder", authenticateUser, async (req, res) => {
     try {
-        const event=eventModel.find({_id:req.body.event_id});
-        event.setReminder=true;
-        event.save();
+        const currentDate = new Date();
+        const events = await EventModel.find({ date: { $gte: currentDate }, user_id: req.user._id, setReminder: true }).sort({ date: 1 });
+        res.send(events);
     } catch (error) {
-        res.status(400).send({message:"Error while saving the reminder"});
+        res.status(400).send({ message: "Error while fetching reminders" });
     }
 });
-//get reminders
-app.get("/reminder",authenticateUser,function(req,res){
-    try {
-        currentDate=Date.now();
-        events=eventModel.find({date:{$gte:currentDate},user_id:req.user.id}).sort({date:1});
-    } catch (error) {
-        res.status(400).send({message:"Error while fetching events"});
-    }
-});
-app.listen(3000,(()=>{
+
+// Start the server
+app.listen(3000, () => {
     console.log("Server started at 3000");
-}));
+});
